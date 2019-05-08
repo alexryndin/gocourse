@@ -98,15 +98,10 @@ func CombineResults(in, out chan interface{}) {
 	out <- s
 }
 
-func RunTask(_job job, wg *sync.WaitGroup, in, out chan interface{}) {
-	defer wg.Done()
-	_job(in, out)
-}
 
-func RunJob(_job job, wg *sync.WaitGroup, in, out chan interface{}) {
+func RunJob(job job, wg *sync.WaitGroup, in, out chan interface{}) {
 	defer wg.Done()
-
-	_job(in, out)
+	job(in, out)
 
 }
 
