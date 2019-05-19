@@ -3,7 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
+	// "io/ioutil"
+	"bufio"
 	"os"
 	"regexp"
 	"strings"
@@ -34,17 +35,15 @@ func FastSearch(out io.Writer) {
 		panic(err)
 	}
 
-	fileContents, err := ioutil.ReadAll(file)
 	if err != nil {
 		panic(err)
 	}
-
+	sc := bufio.NewScanner(file)
 	r := regexp.MustCompile("@")
 	seenBrowsers := []string{}
 	uniqueBrowsers := 0
 	foundUsers := ""
 
-	lines := strings.Split(string(fileContents), "\n")
 
 	user := &Users{}
 	// users := make([]Users, 0)
@@ -58,7 +57,11 @@ func FastSearch(out io.Writer) {
 	// 	users = append(users, *user)
 	// }
 
-	for i, line := range lines {
+	i := -1
+	var line string
+	for sc.Scan() {
+		i++
+		line = sc.Text()
 		err := user.UnmarshalJSON([]byte(line))
 		if err != nil {
 			panic(err)
