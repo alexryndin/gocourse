@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	json "encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -9,8 +9,11 @@ import (
 	"regexp"
 	"strings"
 	// "log"
+
 )
 
+
+//easyjson:json
 const filePath string = "./data/users.txt"
 
 func SlowSearch(out io.Writer) {
