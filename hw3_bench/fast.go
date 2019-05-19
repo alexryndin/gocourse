@@ -6,7 +6,7 @@ import (
 	// "io/ioutil"
 	"bufio"
 	"os"
-	"regexp"
+	// "regexp"
 	"strings"
 	// "log"
 	json "encoding/json"
@@ -39,10 +39,10 @@ func FastSearch(out io.Writer) {
 		panic(err)
 	}
 	sc := bufio.NewScanner(file)
-	r := regexp.MustCompile("@")
+	// r := regexp.MustCompile("@")
 	seenBrowsers := []string{}
 	uniqueBrowsers := 0
-	foundUsers := ""
+	foundUsers := make([]string, 0, 100)
 
 
 	user := &Users{}
@@ -58,11 +58,11 @@ func FastSearch(out io.Writer) {
 	// }
 
 	i := -1
-	var line string
+	var line []byte
 	for sc.Scan() {
 		i++
-		line = sc.Text()
-		err := user.UnmarshalJSON([]byte(line))
+		line = sc.Bytes()
+		err = user.UnmarshalJSON(line)
 		if err != nil {
 			panic(err)
 		}
@@ -70,9 +70,7 @@ func FastSearch(out io.Writer) {
 		isAndroid := false
 		isMSIE := false
 
-		browsers := user.Browsers
-
-		for _, browser := range browsers {
+		for _, browser := range user.Browsers {
 			if ok := strings.Contains(browser, "Android"); ok {
 				isAndroid = true
 				notSeenBefore := true
@@ -109,11 +107,11 @@ func FastSearch(out io.Writer) {
 		}
 
 		// log.Println("Android and MSIE user:", user["name"], user["email"])
-		email := r.ReplaceAllString(user.Email, " [at] ")
-		foundUsers += fmt.Sprintf("[%d] %s <%s>\n", i, user.Name, email)
+		email := strings.Replace(user.Email, "@", " [at] ", 1)
+		foundUsers = append(foundUsers, fmt.Sprintf("[%d] %s <%s>", i, user.Name, email))
 	}
 
-	fmt.Fprintln(out, "found users:\n"+foundUsers)
+	fmt.Fprintln(out, "found users:\n"+strings.Join(foundUsers, "\n")+"\n")
 	fmt.Fprintln(out, "Total unique browsers", len(seenBrowsers))
 
 }
