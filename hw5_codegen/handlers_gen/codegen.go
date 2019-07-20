@@ -17,177 +17,178 @@ import (
 )
 
 var (
-	header = template.Must(template.New("header").Parse(`
-	import (
-		"encoding/json"
-		"fmt"
-		"net/http"
-		//	"net/url"
-		//	"reflect"
-		"strconv"
-	)
-	
-	func handleError(w http.ResponseWriter, err error) {
-		resp := make(map[string]interface{})
-		resp["error"] = ""
-		status := 500
-	
-		switch errt := err.(type) {
-		case ApiError:
-			resp["error"] = errt.Error()
-			status = errt.HTTPStatus
-		default:
-			resp["error"] = errt.Error()
-		}
-		marshalAndWrite(w, resp, status)
+	header = `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	//	"net/url"
+	//	"reflect"
+	"strconv"
+)
+
+func handleError(w http.ResponseWriter, err error) {
+	resp := make(map[string]interface{})
+	resp["error"] = ""
+	status := 500
+
+	switch errt := err.(type) {
+	case ApiError:
+		resp["error"] = errt.Error()
+		status = errt.HTTPStatus
+	default:
+		resp["error"] = errt.Error()
 	}
-	
-	func marshalAndWrite(w http.ResponseWriter, resp map[string]interface{}, status int) {
-		if enc, err := json.Marshal(resp); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, "InternalServerError")
-			return
-		} else {
-			w.WriteHeader(status)
-			w.Write(enc)
-			return
-		}
+	marshalAndWrite(w, resp, status)
+}
+
+func marshalAndWrite(w http.ResponseWriter, resp map[string]interface{}, status int) {
+	if enc, err := json.Marshal(resp); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "InternalServerError")
+		return
+	} else {
+		w.WriteHeader(status)
+		w.Write(enc)
+		return
 	}
-	`))
+}`
 
 	serve = `
-	{{range $k, $v:= .}}
-	func (h *{{$k}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		{{- range $v}}
-		case "{{.Url}}":
-			h.{{.MethodName | ToLower }}Wrapper(w, r)
-		{{- end}}
-		default:
-			err := ApiError{
-				404,
-				fmt.Errorf("unknown method"),
-			}
-			handleError(w, err)
-			//	 h.wrapperDoSomeJob(w, r)
+{{range $k, $v:= .}}
+func (h *{{$k}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	{{- range $v}}
+	case "{{.Url}}":
+		h.{{.MethodName | ToLower }}Wrapper(w, r)
+	{{- end}}
+	default:
+		err := ApiError{
+			404,
+			fmt.Errorf("unknown method"),
 		}
-	{{end}}
-	}`
+		handleError(w, err)
+		//	 h.wrapperDoSomeJob(w, r)
+	}
+}
+{{end}}`
 
 	wrapper = `
-	{{range $k, $v:= .}}
-	{{range $v}}
-	func (h *{{$k}}) {{ .MethodName | ToLower }}Wrapper(w http.ResponseWriter, r *http.Request) {
-	{{ if eq .Method "POST" }}
-		if r.Method != http.MethodPost {
-			err := ApiError{
-				406,
-				fmt.Errorf("bad method"),
-			}
-			handleError(w, err)
-			return
+{{range $k, $v:= .}}
+{{range $v}}
+func (h *{{$k}}) {{ .MethodName | ToLower }}Wrapper(w http.ResponseWriter, r *http.Request) {
+{{ if eq .Method "POST" }}
+	if r.Method != http.MethodPost {
+		err := ApiError{
+			406,
+			fmt.Errorf("bad method"),
 		}
-	{{ end }}
-	{{ if .Auth }}
-		if r.Header.Get("X-Auth") != "100500" {
-			err := ApiError{
-				403,
-				fmt.Errorf("unauthorized"),
-			}
-			handleError(w, err)
-			return
-		}
-	{{ end }}
-		params := {{.MethodName}}Params{}
-		if err := params.decode(r); err != nil {
-			handleError(w, err)
-			return
-		}
-		if err := params.validate(); err != nil {
-			handleError(w, err)
-			return
-		}
-		{{ .MethodName | ToLower }}, err := h.{{.MethodName}}(r.Context(), params)
-		if err != nil {
-			handleError(w, err)
-			return
-		}
-		resp := make(map[string]interface{})
-		resp["response"] = {{ .MethodName }}
-		resp["error"] = ""
-		marshalAndWrite(w, resp, 200)
+		handleError(w, err)
+		return
 	}
-	{{end}}
-	{{end}}
+{{ end }}
+{{ if .Auth }}
+	if r.Header.Get("X-Auth") != "100500" {
+		err := ApiError{
+			403,
+			fmt.Errorf("unauthorized"),
+		}
+		handleError(w, err)
+		return
+	}
+{{ end }}
+	params := {{.Input}}{}
+	if err := params.decode(r); err != nil {
+		handleError(w, err)
+		return
+	}
+	if err := params.validate(); err != nil {
+		handleError(w, err)
+		return
+	}
+	{{ .MethodName | ToLower }}, err := h.{{.MethodName}}(r.Context(), params)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	resp := make(map[string]interface{})
+	resp["response"] = {{ .MethodName | ToLower }}
+	resp["error"] = ""
+	marshalAndWrite(w, resp, 200)
+}
+{{end}}
+{{end}}
 	`
 	decoder = `
-	func (dst *{{.StructName}}) decode(r *http.Request) error {
-		{{- range $fv := .Validators -}}
-		{{- if eq $fv.FieldType "int" }}
-		i, err := strconv.Atoi(r.FormValue("{{ $fv.RequestFieldName }} "))
-		if err != nil {
-			return ApiError{
-				http.StatusBadRequest,
-				fmt.Errorf("age must be int"),
-			}
+func (dst *{{.StructName}}) decode(r *http.Request) error {
+	{{- range $fv := .Validators -}}
+	{{- if eq $fv.FieldType "int" }}
+	i, err := strconv.Atoi(r.FormValue("{{ $fv.RequestFieldName | ToLower }}"))
+	if err != nil {
+		return ApiError{
+			http.StatusBadRequest,
+			fmt.Errorf("age must be int"),
 		}
-		dst.{{- $fv.FieldName }} = i
-		{{ else }}
-		dst.{{ $fv.FieldName }} = r.FormValue("{{ $fv.FieldName | ToLower }}")
-		{{- end }}
-		{{- end }}
-		return nil
-	}`
+	}
+	dst.{{- $fv.FieldName }} = i
+	{{ else }}
+	dst.{{ $fv.FieldName }} = r.FormValue("{{ $fv.RequestFieldName | ToLower }}")
+	{{- end }}
+	{{- end }}
+	return nil
+}`
 	validator = `
-	func (dst *{{.StructName}}) validate(r *http.Request) error {
-		{{ range $fv := .Validators }}
-		{{- if $fv.Validators.Rmin -}}
-		if dst.{{if eq $fv.FieldType "string"}}len({{end}}{{ $fv.FieldName }}{{if eq $fv.FieldType "string"}}){{end}} < {{ $fv.Validators.Min }} {
-			return ApiError{
-				http.StatusBadRequest,
-				fmt.Errorf("{{ $fv.FieldName | ToLower }}{{if eq $fv.FieldType "string"}} len {{end}}must be >= {{ $fv.Validators.Min }}"),
-			}
+func (dst *{{.StructName}}) validate() error {
+	{{ range $fv := .Validators }}
+	{{- if $fv.Validators.Required -}}
+	if dst.{{ $fv.FieldName }} == "" {
+		return ApiError{
+			http.StatusBadRequest,
+			fmt.Errorf("{{ $fv.FieldName | ToLower }} must me not empty"),
 		}
-		{{ end }}
-		{{- if $fv.Validators.Rmax -}}
-		if dst.{{if eq $fv.FieldType "string"}}len({{end}}{{ $fv.FieldName }}{{if eq $fv.FieldType "string"}}){{end}} > {{ $fv.Validators.Max }} {
-			return ApiError{
-				http.StatusBadRequest,
-				fmt.Errorf("{{ $fv.FieldName | ToLower }} must be <= {{ $fv.Validators.Max }}"),
-			}
+	}
+	{{ end }}
+	{{- if $fv.Validators.Rmin -}}
+	if {{if eq $fv.FieldType "string"}}len({{end}}dst.{{ $fv.FieldName }}{{if eq $fv.FieldType "string"}}){{end}} < {{ $fv.Validators.Min }} {
+		return ApiError{
+			http.StatusBadRequest,
+			fmt.Errorf("{{ $fv.FieldName | ToLower }}{{if eq $fv.FieldType "string"}} len{{end}} must be >= {{ $fv.Validators.Min }}"),
 		}
-		{{ end }}
-		{{- if $fv.Validators.Required -}}
-		if dst.{{ $fv.FieldName }} == "" {
-			return ApiError{
-				http.StatusBadRequest,
-				fmt.Errorf("{{ $fv.FieldName | ToLower }} must me not empty"),
-			}
+	}
+	{{ end }}
+	{{- if $fv.Validators.Rmax -}}
+	if dst.{{if eq $fv.FieldType "string"}}len({{end}}{{ $fv.FieldName }}{{if eq $fv.FieldType "string"}}){{end}} > {{ $fv.Validators.Max }} {
+		return ApiError{
+			http.StatusBadRequest,
+			fmt.Errorf("{{ $fv.FieldName | ToLower }} must be <= {{ $fv.Validators.Max }}"),
 		}
-		{{ end }}
-		{{- if ne $fv.Validators.Dflt "" -}}
-		if dst.{{ $fv.FieldName }} == "" {
-			dst.{{ $fv.FieldName }} = "{{ $fv.Validators.Dflt }}"
+	}
+	{{ end }}
+	{{- if ne $fv.Validators.Dflt "" -}}
+	if dst.{{ $fv.FieldName }} == "" {
+		dst.{{ $fv.FieldName }} = "{{ $fv.Validators.Dflt }}"
+	}
+	{{ end }}
+	{{- if $fv.Validators.Enum -}}
+	{{ $fv.FieldName | ToLower }}_map := map[string]bool{
+	{{- range $r := $fv.Validators.Enum }}
+		"{{ $r }}": true,
+	{{- end }}
+	}
+	if _, present := {{ $fv.FieldName | ToLower }}_map[dst.{{ $fv.FieldName }}]; !present {
+		return ApiError{
+			http.StatusBadRequest,
+			fmt.Errorf("{{ $fv.FieldName | ToLower }} must be one of [{{StringsJoin $fv.Validators.Enum ", "}}]"),
 		}
-		{{ end }}
-		{{- if $fv.Validators.Enum -}}
-		{{ $fv.FieldName | ToLower }}_map := map[string]bool{
-		{{- range $r := $fv.Validators.Enum }}
-			"{{ $r }}": true,
-		{{- end }}
-		}
-		if _, present := {{ $fv.FieldName | ToLower }}_map[dst.{{ $fv.FieldName }}]; !present {
-			return ApiError{
-				http.StatusBadRequest,
-				fmt.Errorf("{{ $fv.FieldName | ToLower }} must be one of [{{StringsJoin $fv.Validators.Enum ", "}}]"),
-			}
-		}
-		{{ end }}
-		{{- end }}
+	}
+	{{ end }}
+	{{- end }}
 
-		return nil
+	return nil
+}
 
-	`
+`
 )
 
 type api struct {
@@ -428,11 +429,13 @@ func main() {
 
 	out, _ := os.Create(os.Args[2])
 
-	fmt.Fprintln(out, `package `+node.Name.Name)
-	fmt.Fprintln(out) // empty line
-	fmt.Fprintln(out, `import "encoding/binary"`)
-	fmt.Fprintln(out, `import "bytes"`)
-	fmt.Fprintln(out) // empty line
+	funcMap := template.FuncMap{
+		"ToLower":     strings.ToLower,
+		"StringsJoin": strings.Join,
+	}
+
+	header := template.Must(template.New("header").Funcs(funcMap).Parse(header))
+	header.Execute(out, apis)
 
 	// Parse functions to find all to generate methods for
 	parseApi(node.Decls, apis)
@@ -440,10 +443,6 @@ func main() {
 	fmt.Println("FUCK, FOUND FOLLOWING STRUCTS!")
 	fmt.Println(sv)
 	fmt.Print(apis["MyApi"][0].MethodName)
-	funcMap := template.FuncMap{
-		"ToLower":     strings.ToLower,
-		"StringsJoin": strings.Join,
-	}
 
 	serve := template.Must(template.New("serve").Funcs(funcMap).Parse(serve))
 	serve.Execute(out, apis)
@@ -463,6 +462,14 @@ func main() {
 
 	}
 
+	for _, v := range sv {
+		for _, fv := range v {
+			fmt.Println("PARAMNAME")
+			fmt.Println(strings.ToLower(fv.RequestFieldName))
+		}
+
+	}
+
 	decoder := template.Must(template.New("decoder").Funcs(funcMap).Parse(decoder))
 	validator := template.Must(template.New("validator").Funcs(funcMap).Parse(validator))
 	for k, v := range apis {
@@ -472,13 +479,14 @@ func main() {
 			strct, ok := sv[rcv]
 			if !ok {
 				fmt.Println("Required struct definition not found, go fuck yourself!!!")
-				fmt.Println(k)
-				fmt.Println(m.Input)
 			} else {
 				s := structDesc{
 					StructName: rcv,
 					Validators: strct,
 				}
+				fmt.Println("Show all ??")
+				fmt.Println(strct)
+				fmt.Println(m.Input)
 				decoder.Execute(out, s)
 				validator.Execute(out, s)
 
