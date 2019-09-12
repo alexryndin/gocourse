@@ -17,6 +17,8 @@ import (
 
 type CR map[string]interface{}
 
+const DATABASE = "gocourse"
+
 func handleError(w http.ResponseWriter, err error) {
 	resp := make(map[string]interface{})
 	resp["error"] = ""
@@ -69,6 +71,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.ServeGet(w, r)
 	case http.MethodPut:
 		h.ServePut(w, r)
+	case http.MethodPost:
+		h.ServePost(w, r)
+	case http.MethodDelete:
+		h.ServeDelete(w, r)
 	default:
 		err := ApiError{
 			404,
@@ -104,75 +110,178 @@ func (h *Handler) ServeGet(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-func (h *Handler) ServePut(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) doChangeData(r *http.Request, update bool, id int) (map[string]interface{}, error) {
 	tableName := strings.SplitN(r.URL.Path, "/", -1)[1]
-	query := fmt.Sprintf(`SELECT COLUMN_NAME, DATA_TYPE
+	key, err := h.getPrimaryCol(tableName)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
 		FROM INFORMATION_SCHEMA.COLUMNS
-		WHERE TABLE_NAME = '%s';`, tableName)
+		WHERE TABLE_NAME = '%s' and TABLE_SCHEMA = '%s';`, tableName, DATABASE)
 	rows, err := h.DB.Query(query)
 	if err != nil {
-		handleError(w, err)
-		return
+		return nil, err
 	}
+	defer rows.Close()
 	where, what := make([]string, 0, 2), make([]interface{}, 0, 2)
 	decoder := json.NewDecoder(r.Body)
 	defer r.Body.Close()
 	var r_params map[string]interface{}
 	if err := decoder.Decode(&r_params); err != nil {
-		handleError(w, err)
-		return
+		return nil, err
 	}
-	fmt.Println("map = ", r_params)
 	for rows.Next() {
-		result := make([]interface{}, 2)
+		result := make([]interface{}, 3)
 		for i, _ := range result {
 			result[i] = new(string)
 		}
 		err := rows.Scan(result...)
 		c_name := *result[0].(*string)
 		c_type := *result[1].(*string)
-		fmt.Println("c_name = ", c_name)
-		if strings.ToLower(c_name) == "id" {
+		is_nullable := *result[2].(*string)
+		if strings.ToLower(c_name) == key {
+			if update {
+				if _, ok := r_params[c_name]; ok {
+					return nil, ApiError{400, fmt.Errorf("field %s have invalid type", c_name)}
+				}
+			}
 			continue
 		}
 		if v, ok := r_params[c_name]; ok {
-			where = append(where, fmt.Sprintf("`%s`", c_name))
-			if strings.HasPrefix(strings.ToLower(c_type), "int") {
-				what = append(what, v.(int))
+			if update {
+				where = append(where, fmt.Sprintf("`%s` = ?", c_name))
 			} else {
+				where = append(where, fmt.Sprintf("`%s`", c_name))
+			}
+			fmt.Println("cname =", c_name, "type = ", reflect.TypeOf(v))
+			switch c_type {
+			case "int":
+				switch v.(type) {
+				case float64:
+					what = append(what, v.(int))
+				case int:
+					what = append(what, v)
+				default:
+					return nil, ApiError{400, fmt.Errorf("field %s have invalid type", c_name)}
+				}
+			case "varchar", "text":
+				switch v.(type) {
+				case string:
+					what = append(what, v)
+				case nil:
+					if is_nullable == "YES" {
+						what = append(what, v)
+					} else {
+						return nil, ApiError{400, fmt.Errorf("field %s have invalid type", c_name)}
+					}
+				default:
+					what = append(what, v)
+					return nil, ApiError{400, fmt.Errorf("field %s have invalid type", c_name)}
+				}
+			default:
 				what = append(what, v)
+
 			}
 			// what = append(what, r.FormValue(c_name))
-		}
-		if r.FormValue(c_name) != "" {
+		} else {
+			if is_nullable == "NO" && !update {
+				fmt.Println("what to add - ", c_name)
+				switch c_type {
+				case "int":
+					what = append(what, 0)
+				case "varchar", "text":
+					what = append(what, "")
+				default:
+					return nil, ApiError{500, fmt.Errorf("unsupported DB type: %s", c_type)}
+				}
+				where = append(where, fmt.Sprintf("`%s`", c_name))
+			}
 		}
 
 		if err != nil {
-			handleError(w, err)
-			return
+			return nil, err
 		}
 	}
 	if len(what) > 0 {
-		qstns := strings.Repeat("?, ", len(what))
-		i_query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, tableName, strings.Join(where, ", "), qstns[:len(qstns)-2])
-		fmt.Println("query to exec --> ", i_query)
-		r, err := h.DB.Exec(i_query, what...)
+		var query string
+		if update {
+			query = fmt.Sprintf(`UPDATE %s SET %s WHERE %s = ?`, tableName, strings.Join(where, ", "), key)
+			what = append(what, id)
+			fmt.Println("what ", what)
+		} else {
+			qstns := strings.Repeat("?, ", len(what))
+			query = fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, tableName, strings.Join(where, ", "), qstns[:len(qstns)-2])
+		}
+		fmt.Println("query to exec --> ", query)
+		r, err := h.DB.Exec(query, what...)
 		if err != nil {
+			fmt.Println("I'm here")
 			fmt.Println(err.Error())
-			handleError(w, err)
-			return
+			return nil, err
 		}
 		lastID, err := r.LastInsertId()
 		if err != nil {
-			handleError(w, err)
-			return
+			return nil, err
+		}
+		raf, err := r.RowsAffected()
+		if err != nil {
+			return nil, err
 		}
 		resp := make(map[string]interface{})
-		resp["response"] = CR{"id": lastID}
+		if update {
+			resp["response"] = CR{"updated": raf}
+		} else {
+			resp["response"] = CR{key: lastID}
+		}
+		return resp, nil
+
+	} else {
+		return nil, fmt.Errorf("Corrupted query")
+	}
+}
+
+func (h *Handler) ServeDelete(w http.ResponseWriter, r *http.Request) {
+	if id, err := strconv.ParseInt(strings.SplitN(r.URL.Path, "/", -1)[2], 10, 32); err != nil {
+		handleError(w, err)
+		return
+	} else {
+		r, err := h.DB.Exec("DELETE FROM items WHERE id = ?", id)
+		if err != nil {
+			handleError(w, err)
+		}
+		raf, err := r.RowsAffected()
+		if err != nil {
+			handleError(w, err)
+		}
+		resp := make(map[string]interface{})
+		resp["response"] = CR{"deleted": raf}
 		marshalAndWrite(w, resp, 200)
 		return
-
 	}
+}
+
+func (h *Handler) ServePost(w http.ResponseWriter, r *http.Request) {
+	if id, err := strconv.ParseInt(strings.SplitN(r.URL.Path, "/", -1)[2], 10, 32); err != nil {
+		handleError(w, err)
+		return
+	} else {
+		resp, err := h.doChangeData(r, true, int(id))
+		if err != nil {
+			handleError(w, err)
+			fmt.Println(err.Error())
+			return
+		}
+		marshalAndWrite(w, resp, 200)
+	}
+}
+
+func (h *Handler) ServePut(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.doChangeData(r, false, 0)
+	if err != nil {
+		handleError(w, err)
+	}
+	marshalAndWrite(w, resp, 200)
 
 }
 
@@ -263,14 +372,8 @@ func retriveValue(ic interface{}) (out interface{}, err error) {
 func (h *Handler) ShowTable(w http.ResponseWriter, r *http.Request) {
 	tableName := strings.SplitN(r.URL.Path, "/", -1)[1]
 	var limit, offset int64 = 5, 0
-	if err := parseInt(r, "limit", &limit); err != nil {
-		handleError(w, err)
-		return
-	}
-	if err := parseInt(r, "offset", &offset); err != nil {
-		handleError(w, err)
-		return
-	}
+	parseInt(r, "limit", &limit)
+	parseInt(r, "offset", &offset)
 	query := fmt.Sprintf("SELECT * FROM %s LIMIT ? OFFSET ?", tableName)
 	fmt.Println("limit = ", limit)
 	fmt.Println("offset = ", offset)
@@ -287,6 +390,7 @@ func (h *Handler) ShowTable(w http.ResponseWriter, r *http.Request) {
 		handleError(w, err)
 		return
 	}
+	defer rows.Close()
 	records := make([]interface{}, 0, 5)
 	resp := make(map[string]interface{})
 	for rows.Next() {
@@ -321,15 +425,34 @@ func ScanRow(rows *sql.Rows) (map[string]interface{}, error) {
 		ans[t.Name()] = value
 	}
 	return ans, nil
+}
 
+func (h *Handler) getPrimaryCol(tableName string) (string, error) {
+	query := fmt.Sprintf(`SELECT COLUMN_NAME
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_NAME = '%s' and TABLE_SCHEMA = '%s' AND COLUMN_KEY='PRI';`, tableName, DATABASE)
+	row := h.DB.QueryRow(query)
+	key := new(string)
+	err := row.Scan(key)
+	if err != nil {
+		fmt.Println(err.Error())
+		return "", err
+	}
+	return *key, nil
 }
 
 func (h *Handler) ShowRecord(w http.ResponseWriter, r *http.Request) {
 	tableName := strings.SplitN(r.URL.Path, "/", -1)[1]
 	id := strings.SplitN(r.URL.Path, "/", -1)[2]
-	query := fmt.Sprintf("SELECT * FROM %s WHERE id = ?", tableName)
+	key, err := h.getPrimaryCol(tableName)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	query := fmt.Sprintf("SELECT * FROM %s WHERE `%s` = ?", tableName, key)
 	rows, err := h.DB.Query(query, id)
 	if err != nil {
+		fmt.Println(err.Error())
 		handleError(w, err)
 		return
 	}
@@ -375,68 +498,4 @@ func (h *Handler) ShowTables2(w http.ResponseWriter, r *http.Request) {
 	resp["response"] = ans
 
 	marshalAndWrite(w, resp, 200)
-}
-
-func (h *Handler) ShowTables(w http.ResponseWriter, r *http.Request) {
-
-	rows, err := h.DB.Query("SHOW TABLES")
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	defer rows.Close()
-	tables := make([]string, 0, 5)
-	for rows.Next() {
-
-		var s string
-		rows.Scan(&s)
-
-		c, _ := rows.Columns()
-		fmt.Println(c)
-
-		ct, err := rows.ColumnTypes()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, err.Error())
-			return
-		}
-		for _, v := range ct {
-			//fmt.Fprintln(w, v.Name(), ": ", v.DatabaseTypeName(), ": ", v.ScanType())
-			fmt.Println(v.Name(), ": ", v.DatabaseTypeName(), ": ", v.ScanType())
-			//	fmt.Fprintln(w, s)
-			tables = append(tables, s)
-		}
-	}
-
-	for _, v := range tables {
-		fmt.Println("Tablename to query --> ", v)
-		query := fmt.Sprintf("SELECT * from %v", v)
-		trows, err := h.DB.Query(query)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, err.Error())
-			return
-		}
-		for trows.Next() {
-			ct, err := trows.ColumnTypes()
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprint(w, err.Error())
-				return
-			}
-			for _, v := range ct {
-				fmt.Fprintln(w, v.Name(), ": ", v.DatabaseTypeName(), ": ", v.ScanType())
-				fmt.Println(v.Name(), ": ", v.DatabaseTypeName(), ": ", v.ScanType())
-			}
-			vals := make([]interface{}, len(ct))
-			AssertColumns(ct, vals)
-			//			vals[1] = new(string)
-			trows.Scan(vals...)
-			fmt.Println(vals[1])
-			fmt.Println(reflect.TypeOf(vals[1]))
-			fmt.Println(string(*vals[1].(*sql.RawBytes)))
-
-		}
-
-	}
 }
