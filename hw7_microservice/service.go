@@ -316,6 +316,7 @@ func (srv *AdminServerImpl) Statistics(t *StatInterval, out Admin_StatisticsServ
 			srv.SSLock.Lock()
 			delete(srv.StatSubscribers, lch)
 			srv.SSLock.Unlock()
+			ticker.Stop()
 			return out.Context().Err()
 		}
 	}
