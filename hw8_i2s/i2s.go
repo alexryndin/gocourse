@@ -11,11 +11,6 @@ func i2s(data interface{}, out interface{}) error {
 	}
 	dest := reflect.ValueOf(out).Elem()
 	val := reflect.ValueOf(data)
-	//	switch dest.Kind() {
-	//	case reflect.Slice:
-	//	case reflect.Struct:
-	//		set_field(dest, val)
-	//	}
 	if err := set_field(dest, val); err != nil {
 		return err
 	}
@@ -67,7 +62,6 @@ func set_field(field reflect.Value, data reflect.Value) error {
 				if err := set_struct(new_elem, reflect.ValueOf(data.Index(i).Interface())); err != nil {
 					return err
 				}
-				// set_struct(new_elem, reflect.ValueOf(data.Index(i).Interface()))
 				new_slice = reflect.Append(new_slice, new_elem)
 			}
 			field.Set(new_slice)
@@ -78,7 +72,6 @@ func set_field(field reflect.Value, data reflect.Value) error {
 		if err := set_struct(field, data); err != nil {
 			return err
 		}
-		//set_struct(field, data)
 
 	default:
 		return fmt.Errorf("Error")
