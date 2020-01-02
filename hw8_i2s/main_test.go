@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
-	// "fmt"
 )
 
 type Simple struct {
@@ -147,6 +147,8 @@ func TestErrors(t *testing.T) {
 	}
 	for idx, item := range cases {
 		var tmpData interface{}
+		fmt.Printf("Test %d\n", idx)
+		fmt.Println(item.JsonData)
 		json.Unmarshal([]byte(item.JsonData), &tmpData)
 		inType := reflect.ValueOf(item.Result).Type()
 		err := i2s(tmpData, item.Result)
